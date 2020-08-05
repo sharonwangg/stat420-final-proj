@@ -1,0 +1,288 @@
+---
+title: "Data Cleaning"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r library_setup, message=FALSE}
+libraries <- c("tidyverse", "faraway", "stringr", "gtools", "readr")
+lapply(libraries, require, character.only = TRUE)
+```
+
+## Introduction
+We would like to explore which variables can best predict the total confirmed COVID-19 count of a region. This dataset includes quantitative and qualitative data about the COVID-19 pandemic. The data gathered at https://github.com/open-covid-19/data is collected from many different sources, including the University of Oxford, the NOAA, the WorldBank Database, WorldPop, DataCommons, and many more. The full list can be found in the README file. Some variables of interest include population_density, restrictions_on_gatherings, and mobility_retail_and_recreation. This is interesting to us because we would like to discover exactly what predictors can be predict the total confirmed COVID-19 count of a region to see what really affects the impact of the virus, and we personally believe that variables such as population density, restrictions on gatherings, population age, cormorbidity mortality rate, and general mobility affect the impact of COVID-19 on a region the most. The goal of the model is to see which variables truly affect the COVID-19 count of a region. 
+
+## Methods
+### Data Preparation
+```{r}
+# github repo: https://github.com/open-covid-19/data
+# loading this data takes awhile, storing as .csv might be faster although out of date
+data_full <- read_csv("https://storage.googleapis.com/covid19-open-data/v2/main.csv")
+write_csv(data_full, "data_full.csv")
+#data_full <- read_csv("data_full.csv", guess_max = 3103005)
+```
+
+Figuring out which columns have a lot of NAs and avoiding them
+- although issue might be in certain countries and earlier dates (before the pandemic started)
+```{r}
+apply(data_full, MARGIN = 2, FUN = function(x) { sum(is.na(x)) })
+```
+
+Take complete cases so linear regression doesn't fail
+- use only certain columns we need for checking
+``` {r}
+# include country to be able to filter by US
+# subregion2_code = FIPS (zip) code
+must_include = c("total_confirmed", "country_code")
+
+possible = c("population", "urban_population", "population_density", "human_development_index", "gdp_per_capita", "date", "life_expectancy", "comorbidity_mortality_rate", "physicians", "school_closing", "cancel_public_events", "restrictions_on_gatherings", "stay_at_home_requirements", "mobility_retail_and_recreation", "mobility_parks", "mobility_transit_stations", "mobility_workplaces", "mobility_residential")
+
+possible_list <- data.frame()
+for (i in 1:length(possible)) {
+  current = c(must_include, possible[i])
+  complete_vec = complete.cases(data_full[, current])
+  clean_data = data_full[complete_vec, ]
+  good = nrow(clean_data) > 1
+  add = 1
+  while (good && i + add < length(possible)) {
+    possible_list = rbind(possible_list, data.frame(columns = str_c(current, collapse = ","), rows = nrow(clean_data), cols = length(current)))
+    current = c(current, possible[i + add])
+    complete_vec = complete.cases(data_full[, current])
+    clean_data = data_full[complete_vec, ]
+    good = nrow(clean_data) > 1
+    add = add + 1
+  }
+}
+
+max_cols = possible_list[which.max(possible_list$cols),]
+columns_kept = str_split(max_cols$columns, ",")[[1]]
+(rows_excluded = possible[!(possible %in% columns_kept)])
+max_cols$rows
+```
+
+```{r}
+complete_vec = complete.cases(data_full[, columns_kept])
+clean_data = data_full[complete_vec, columns_kept]
+clean_data$total_confirmed[1:100]
+```
+
+Normalizing the population counts because absolute numbers probably don't add any predictive power
+```{r}
+population_data = subset(clean_data, select = grepl("population_age_", names(clean_data)))
+total_populations = apply(population_data, MARGIN = 1, FUN = sum)
+normalized_population = data.frame(t(t(population_data) / total_populations))
+```
+
+Setting the `date` column as a Date object, rather than a factor variable
+```{r}
+clean_data$date <- as.Date(clean_data$date)
+```
+
+Select columns that would best fit our goal
+```{r}
+clean_data_subset = clean_data %>%
+  bind_cols(normalized_population) %>%
+  filter(country_code == "US") %>%
+  subset(select = -country_code)
+head(clean_data_subset)
+```
+
+```{r}
+# saving the cleaned dataset so that we don't have to keep running above code
+write_csv(clean_data_subset, "clean_data_subset.csv")
+```
+
+### Assumption Checking
+Linear model?
+- Linear
+- Independent
+  - no/little collinearity --> variance inflation factor (VIF)
+- Normal
+  - Shapiro-Wilk test
+  - Q-Q plot
+- Equal variance
+  - bptest
+
+### Models
+- Additive
+- Interactions
+- Polynomial
+- Transformations (log, semi-log)
+- step
+  - backward
+  - forward
+  - both
+  - BIC vs. AIC
+- use of ANOVA to compare null vs. added model
+
+```{r}
+colnames(clean_data_subset)
+```
+Above are the variables that seem to initially have a strong connection to the response, `total_confirmed`.
+
+```{r}
+clean_data_subset = clean_data_subset %>% drop_na()
+```
+
+```{r}
+# simple additive model
+full_add_model = lm(total_confirmed ~ ., data = clean_data_subset)
+full_add_model$coef
+```
+
+### Correlation Analysis
+
+```{r}
+# subset of `clean_data_subset` with only numeric variables
+nums = unlist(lapply(clean_data_subset, is.numeric))
+numeric_data = clean_data_subset[, nums]
+```
+
+### Scatter Plot Matrix
+```{r fig.height=20, fig.width=20, message=FALSE, warning=FALSE}
+pairs(numeric_data, pch = 20)
+```
+
+```{r warning=FALSE}
+cor(numeric_data)
+```
+- `school_closing`, `cancel_public_events`, `restrictions_on_gatherings`, and `stay_at_home_requirements` have collinearity, which is not surprising because these 4 predictors are very similar to each other.
+- In addition, `mobility_retail_and_recreation` and `mobility_transit_stations` also have collinearity, which is not surprising because these 2 predictors are also very similar to each other.
+
+```{r}
+# Deal with collinearity
+clean_data_subset$school_closing = NULL
+clean_data_subset$cancel_public_events = NULL
+clean_data_subset$restrictions_on_gatherings = NULL
+clean_data_subset$mobility_transit_stations = NULL
+```
+
+```{r}
+# simple additive model
+full_add_model = lm(total_confirmed ~ ., data = clean_data_subset)
+full_add_model$coef
+```
+
+```{r}
+# calculate residual standard error
+sigma(full_add_model)
+
+# calculate adjusted R^2
+summary(full_add_model)$adj.r.squared
+```
+Poor predictive ability. High residual standard error, low adjusted R^2. 
+
+```{r}
+# interaction
+int_model = lm(total_confirmed ~ . ^ 2, data = clean_data_subset)
+```
+
+```{r}
+# # back aic
+# back_aic = step(int_model, direction = "backward", trace = 0)
+# # back bic
+# n = length(int_model$residuals)
+# back_bic = step(int_model, direction = "backward", k = log(n), trace = 0)
+# # forward aic
+# null_model = lm(total_confirmed ~ 1, data = clean_data_subset)
+# forward_aic = step(
+#   null_model,
+#   scope = total_confirmed ~ (population + urban_population + population_density + human_development_index + gdp_per_capita + date + life_expectancy + comorbidity_mortality_rate + physicians + school_closing + cancel_public_events + restrictions_on_gatherings + stay_at_home_requirements + mobility_retail_and_recreation + mobility_parks + mobility_transit_stations)^2,
+#   direction = "forward", trace = 0)
+# # forward bic
+# forward_bic = step(
+#   null_model, 
+#   scope = total_confirmed ~ (population + urban_population + population_density + human_development_index + gdp_per_capita + date + life_expectancy + comorbidity_mortality_rate + physicians + school_closing + cancel_public_events + restrictions_on_gatherings + stay_at_home_requirements + mobility_retail_and_recreation + mobility_parks + mobility_transit_stations)^2, 
+#   direction = "forward", k = log(n), trace = 0)
+```
+
+```{r}
+#all.equal(back_aic$coef, back_bic$coef)
+```
+The model created from backwards AIC and backwards BIC are the same model.
+
+```{r}
+#back_model = back_aic
+```
+
+```{r}
+# use anova to compare to models created from AIC and BIC
+#(back_pvalue = anova(back_model, int_model)[2, "Pr(>F)"])
+#(forward_aic_pvalue = anova(forward_aic, int_model)[2, "Pr(>F)"])
+#(forward_bic_pvalue = anova(forward_bic, int_model)[2, "Pr(>F)"])
+```
+- The model created from backwards AIC/BIC predicts better than the interaction model with a p-value of 
+- The interaction model predicts better than the model created from forward AIC with a p-value of
+- The interaction model predicts better than the model created from forward BIC with a p-value of 
+- Therefore, the model created from backwards AIC/BIC predicts better than the interaction model, which predicts better than the model created from forward AIC and forward BIC.
+
+```{r}
+#best_model = back_model
+```
+
+#### Residual Diagnostics
+- fitted vs residuals plot
+
+```{r}
+# plot(best_model$fitted.values, best_model$residuals, pch = 20,
+#     xlab = "Fitted", ylab = "Residuals", main = "Data from the Best Model")
+# abline(h = 0, lwd = 2, col = "red")
+```
+
+#### Check Constant Variance assumption
+```{r}
+# # Breusch-Pagan Test
+# library(lmtest)
+# as.vector(bptest(best_model)$p.value)
+```
+
+#### Check Normality assumption
+```{r}
+# # Histogram of Residuals
+# hist(best_model$residuals,
+#      xlab = "Residuals", main = "Histogram of Residuals of Best Model",
+#      breaks = 50)
+# 
+# # QQ Plot
+# qqnorm(best_model$residuals, main = "Normal Q-Q Plot of Best Model", pch = 20)
+# qqline(best_model$residuals, lwd = 2, col = "red")
+# 
+# # Shapiro-Wilkes Test
+# shapiro.test(best_model$residuals)$p.value
+```
+
+#### Outlier Diagnostics
+- Cook's distance + influence
+
+```{r}
+# cds = cooks.distance(best_model)
+# n = length(best_model$fitted.values)
+# influential_cd = 4 / n
+# cds[cds > influential_cd]
+```
+
+#### Model Statistics
+- LOOCV (multiple linear regression)
+```{r}
+# calc_loocv_rmse = function(model) {
+#   sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2))
+# }
+# 
+# calc_loocv_rmse(best_model)
+```
+- K-fold CV (general linear regression)
+```{r}
+# library(boot)
+# set.seed(1)
+# cv.glm(clean_data_subset, best_model, K = 5)$delta[1]
+```
+- R^2, RMSE (multiple linear regression)
+```{r}
+# summary(best_model)$r.squared
+# summary(best_model)$adj.r.squared
+```
+
+
