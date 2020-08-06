@@ -1,5 +1,5 @@
 ---
-title: "Data Cleaning"
+title: "How do we best predict the total confirmed COVID-19 cases count?"
 output: html_document
 ---
 
@@ -7,32 +7,31 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r library_setup, message=FALSE}
+```{r library_setup, message=FALSE, include=FALSE}
 libraries <- c("tidyverse", "faraway", "stringr", "gtools", "readr")
 lapply(libraries, require, character.only = TRUE)
 ```
 
 ## Introduction
-We would like to explore which variables can best predict the total confirmed COVID-19 count of a region. This dataset includes quantitative and qualitative data about the COVID-19 pandemic. The data gathered at https://github.com/open-covid-19/data is collected from many different sources, including the University of Oxford, the NOAA, the WorldBank Database, WorldPop, DataCommons, and many more. The full list can be found in the README file. Some variables of interest include population_density, restrictions_on_gatherings, and mobility_retail_and_recreation. This is interesting to us because we would like to discover exactly what predictors can be predict the total confirmed COVID-19 count of a region to see what really affects the impact of the virus, and we personally believe that variables such as population density, restrictions on gatherings, population age, cormorbidity mortality rate, and general mobility affect the impact of COVID-19 on a region the most. The goal of the model is to see which variables truly affect the COVID-19 count of a region. 
+We would like to explore which variables can best predict the total confirmed COVID-19 count of a region. This dataset includes quantitative and qualitative data about the COVID-19 pandemic. The data gathered at https://github.com/open-covid-19/data is collected from many different sources, including the University of Oxford, the NOAA, the WorldBank Database, WorldPop, DataCommons, and many more. The full list can be found in the README file. Some variables of interest include `cancel_public_events`, `school_closing`, and `mobility_transit_stations` This is interesting to us because we would like to discover exactly what predictors can be predict the total confirmed COVID-19 count of a region to see what really affects the impact of the virus, and we personally believe that variables such as population density, restrictions on gatherings, population age, cormorbidity mortality rate, and general mobility affect the impact of COVID-19 on a region the most. The goal of the model is to see which variables truly affect the COVID-19 count of a region. 
 
 ## Methods
 ### Data Preparation
-```{r}
+```{r echo=TRUE, message=FALSE, warning=FALSE}
 # github repo: https://github.com/open-covid-19/data
 # loading this data takes awhile, storing as .csv might be faster although out of date
-#data_full <- read_csv("https://storage.googleapis.com/covid19-open-data/v2/main.csv")
+# data_full <- read_csv("https://storage.googleapis.com/covid19-open-data/v2/main.csv")
 # write_csv(data_full, "data_full.csv")
 data_full <- read_csv("data_full.csv", guess_max = 3825711)
 ```
 
 Figuring out which columns have a lot of NAs and avoiding them
 - although issue might be in certain countries and earlier dates (before the pandemic started)
-```{r}
+```{r include=FALSE}
 apply(data_full, MARGIN = 2, FUN = function(x) { length(unique(x)) })
 ```
 
-Take complete cases so linear regression doesn't fail
-- use only certain columns we need for checking
+Take complete cases so linear regression doesn't fail. Use only certain columns we need for checking
 ``` {r}
 # include country to be able to filter by US
 # subregion2_code = FIPS (zip) code
@@ -66,7 +65,6 @@ max_cols$rows
 ```{r}
 complete_vec = complete.cases(data_full[, columns_kept])
 clean_data = data_full[complete_vec, columns_kept]
-clean_data$total_confirmed[1:100]
 ```
 
 Normalizing the population counts because absolute numbers probably don't add any predictive power
@@ -87,9 +85,9 @@ clean_data_subset = clean_data %>%
   bind_cols(normalized_population) %>%
   filter(country_code == "US") %>%
   subset(select = -country_code)
-head(clean_data_subset)
 ```
 
+Then, remove some variables who had VIFs as large as the thousands and tens of thousands, which would negatively impact the overall model.
 ```{r}
 # saving the cleaned dataset so that we don't have to keep running above code
 write_csv(clean_data_subset, "clean_data_subset.csv")
@@ -97,51 +95,102 @@ clean_data_subset = read.csv("clean_data_subset.csv")
 clean_data_subset = clean_data_subset %>% subset(select = c(total_confirmed, school_closing, cancel_public_events, stay_at_home_requirements, mobility_parks, mobility_transit_stations))
 names(clean_data_subset)
 ```
-
-### Models
-- Additive
-- Interactions
-- Polynomial
-- Transformations (log, semi-log)
-- step
-  - backward
-  - forward
-  - both
-  - BIC vs. AIC
-- use of ANOVA to compare null vs. added model
-
-```{r}
-str(clean_data_subset)
-clean_data_subset$date = NULL
-```
 Above are the variables that seem to initially have a strong connection to the response, `total_confirmed`.
 
-### Correlation Analysis
+```{r}
+clean_data_subset$date = NULL
+```
 
 ### Scatter Plot Matrix
 ```{r fig.height=20, fig.width=20}
-pairs(clean_data_subset, pch = 20)
+pairs(clean_data_subset, pch = 20, cex = 3)
 ```
+
 ```{r warning=FALSE}
 cor(clean_data_subset)
 ```
+- `school_closing` and `cancel_public_events` and `stay_at_home_requiremenets` have collinearity.
+- `cancel_public_events` and `stay_at_home_requirements` have collinearity.
 
-Below, we will be fitting the additive and interactive models for the data.
-
+Perform backwards and forward AIC and BIC on the full additive model, and then use anova() to pick the best model out of the 4. 
 ```{r}
 # additive
 full_add_model = lm(total_confirmed ~ ., data = clean_data_subset)
-summary(full_add_model)
 ```
 
 ```{r}
+# back aic
+back_aic = step(full_add_model, direction = "backward", trace = 0)
+# back bic
+n = length(full_add_model$residuals)
+back_bic = step(full_add_model, direction = "backward", k = log(n), trace = 0)
+# forward aic
+null_model = lm(total_confirmed ~ 1, data = clean_data_subset)
+forward_aic = step(
+  null_model,
+  scope = total_confirmed ~ school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations,
+  direction = "forward", trace = 0)
+# forward bic
+forward_bic = step(
+  null_model, 
+  scope = total_confirmed ~ school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations, 
+  direction = "forward", k = log(n), trace = 0)
+```
+
+```{r}
+# use anova to compare to models created from AIC and BIC
+(back_aic_pvalue = anova(back_aic, full_add_model)[2, "Pr(>F)"])
+(back_bic_pvalue = anova(back_bic, full_add_model)[2, "Pr(>F)"])
+(forward_aic_pvalue = anova(forward_aic, full_add_model)[2, "Pr(>F)"])
+(forward_bic_pvalue = anova(forward_bic, full_add_model)[2, "Pr(>F)"])
+```
+- The model created from backwards AIC predicts better than the interaction model with a p-value of `r back_aic_pvalue`. 
+- The model created from backwards BIC predicts better than the interaction model with a p-value of `r back_bic_pvalue`. 
+- The model created from forwards AIC predicts better than the interaction model with a p-value of `r forward_aic_pvalue`.
+- The model created from forwards BIC predicts better than the interaction model with a p-value of `r forward_bic_pvalue`.
+- The model with the highest p-value are the backward AIC model and the forward AIC model.
+
+```{r}
+back_aic$coef
+forward_aic$coef 
+```
+The coefficients of these two models are the same, so we can use either.
+
+```{r}
+step_from_add = back_aic
+```
+
+```{r}
+vif(step_from_add)
+```
+
+```{r}
+plot(step_from_add$model)
+```
+
+The vifs are not terrible on this model, however, based on these plots, it is possible to do better.
+
+```{r message=FALSE, warning=FALSE}
+#boxcox model
+library(MASS)
+library(faraway)
+boxcox(step_from_add, plotit = TRUE)
+```
+
+Based on the boxcox plot, it seems that we should be using a logarithmic transformation so we start by taking the log of the response variable.
+
+```{r}
+log_step_from_add = lm(log(total_confirmed) ~ stay_at_home_requirements + mobility_parks + mobility_transit_stations, data = clean_data_subset)
+```
+This will likely be one of our final models.
+
+Next, perform backwards and forward AIC and BIC on the interactive model that goes up to 2-way interactions, and then use anova() to pick the best model out of the 4. 
+```{r}
 # interaction
-int_model = lm(total_confirmed ~ . ^ 2  - school_closing:stay_at_home_requirements - cancel_public_events:stay_at_home_requirements, data = clean_data_subset)
-summary(int_model)
+int_model = lm(total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2, data = clean_data_subset)
 ```
 
 Using our model that includes all the interactions, we can use those as starting points for the AIC and BIC created models. 
-
 ```{r}
 # back aic
 back_aic = step(int_model, direction = "backward", trace = 0)
@@ -159,171 +208,169 @@ forward_bic = step(
   null_model, 
   scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2, 
   direction = "forward", k = log(n), trace = 0)
-summary(back_aic)
-summary(back_bic)
 ```
-
 
 ```{r}
 # use anova to compare to models created from AIC and BIC
-(back_pvalue = anova(back_aic, int_model)[2, "Pr(>F)"])
+(back_aic_pvalue = anova(back_aic, int_model)[2, "Pr(>F)"])
+(back_bic_pvalue = anova(back_bic, int_model)[2, "Pr(>F)"])
 (forward_aic_pvalue = anova(forward_aic, int_model)[2, "Pr(>F)"])
 (forward_bic_pvalue = anova(forward_bic, int_model)[2, "Pr(>F)"])
 ```
-- The model created from backwards AIC/BIC predicts better than the interaction model with a p-value of `r back_pvalue`. 
-- The interaction model predicts better than the model created from forward AIC with a p-value of `r forward_aic_pvalue`.
-- The interaction model predicts better than the model created from forward BIC with a p-value of `r forward_bic_pvalue`.
-- Therefore, the model created from backwards AIC/BIC predicts better than the interaction model, which predicts better than the model created from forward AIC and forward BIC.
+- The model created from backwards AIC predicts better than the interaction model with a p-value of `r back_aic_pvalue`. 
+- The model created from backwards BIC predicts better than the interaction model with a p-value of `r back_bic_pvalue`. 
+- The model created from forwards AIC predicts better than the interaction model with a p-value of `r forward_aic_pvalue`.
+- The model created from forwards BIC predicts better than the interaction model with a p-value of `r forward_bic_pvalue`.
+
+From the above p-values, it seems that the model created from backwards AIC and the model created from forwards AIC are the best, so we will compare those.
+```{r}
+back_aic$coef
+forward_aic$coef
+```
+Since they have the same coefficients, these 2 models are the same.
 
 ```{r}
-best_model = back_bic
-#coef(best_model)
-car::vif(best_model)
-plot(best_model$model)
+step_from_int = back_aic
+vif(step_from_int)
+```
+
+```{r}
+plot(step_from_int$model)
 ```
 
 The vifs are not terrible on this model, however, based on these plots, it is possible to do better.
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 #boxcox model
 library(MASS)
 library(faraway)
-boxcox(int_model, plotit = TRUE)
+boxcox(step_from_int, plotit = TRUE)
 ```
 
-Based on the boxcox plot, it seems like we should be using a logarithmic transformation so we start by taking the log of the response variable.
-
+Based on the boxcox plot, it seems that we should be using a logarithmic transformation so we start by taking the log of the response variable.
 ```{r}
-#log model
-int_log_model = lm(log(total_confirmed) ~ . ^ 2 - school_closing:stay_at_home_requirements - cancel_public_events:stay_at_home_requirements, data = clean_data_subset)
-
-back_aic_log_model = step(int_log_model, direction = "backward", trace = 0)
-back_bic_log_model = step(int_log_model, direction = "backward", k = log(n), trace = 0)
-
-null_model = lm(log(total_confirmed) ~ 1, data = clean_data_subset)
-
-#forward aic log
-forward_aic_log = step(
-  null_model,
-  scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2,
-  direction = "forward", trace = 0)
-
-# forward bic log
-forward_bic_log = step(
-  null_model, 
-  scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2, 
-  direction = "forward", k = log(n), trace = 0)
+log_step_from_int = lm(log(total_confirmed) ~ stay_at_home_requirements + mobility_parks + mobility_transit_stations + stay_at_home_requirements:mobility_parks + mobility_parks:mobility_transit_stations, data = clean_data_subset)
 ```
+This will likely be one of our final models.
 
-Now that we have all the AIC and BIC determined models with a log transformation of the response variable, we can take a look at the boxcox plots. 
+## Results
+### Check Assumptions
+#### Convenience Functions
+```{r message=FALSE, warning=FALSE}
+fitted_vs_residuals = function(model, title) {
+  plot(model$fitted.values, model$residuals, pch = 20,
+       xlab = "Fitted", ylab = "Residuals", main = title)
+  abline(h = 0, lwd = 2, col = "red")
+}
 
-```{r}
-boxcox(back_aic_log_model, plotit = TRUE)
-boxcox(back_bic_log_model, plotit = TRUE)
-boxcox(forward_aic_log, plotit = TRUE)
-boxcox(forward_bic_log, plotit = TRUE)
-```
-
-These boxcox plots indicate that we made the right transformations so now we can determine which of these models are the best.
-
-```{r}
-(anova(back_aic_log_model, int_log_model)[2, "Pr(>F)"])
-(anova(back_bic_log_model, int_log_model)[2, "Pr(>F)"])
-(anova(forward_aic_log, int_log_model)[2, "Pr(>F)"])
-(anova(forward_bic_log, int_log_model)[2, "Pr(>F)"])
-```
-
-Based on these p-values from the anova tests, we should compare the backwards AIC model and the forward AIC model.
-
-```{r}
-(anova(forward_aic_log, back_aic_log_model)[2, "Pr(>F)"])
-```
-
-Based on the p-value of this anova test, we can see that the we should be choosing the smaller model which in this case is the foward_aic_log model. Let us set the forward_aic_log model as the final model we will be using to check the assumptions we are making of this model.
-
-```{r}
-final_model = forward_aic_log
-```
-
-### Assumption Checking
-Linear model?
-- Linear
-- Independent
-  - no/little collinearity --> variance inflation factor (VIF)
-- Normal
-  - Shapiro-Wilk test
-  - Q-Q plot
-- Equal variance
-  - bptest
-
-#### Residual Diagnostics
-- fitted vs residuals plot
-
-```{r}
-plot(final_model$fitted.values, final_model$residuals, pch = 20,
-    xlab = "Fitted", ylab = "Residuals", main = "Data from the Best Model")
-abline(h = 0, lwd = 2, col = "red")
-```
-
-#### Check Constant Variance assumption
-```{r}
-# Breusch-Pagan Test
 library(lmtest)
-as.vector(bptest(final_model)$p.value)
+get_bp_pvalue = function(model) {
+  as.vector(bptest(model)$p.value)
+}
+
+residual_histogram = function(model, title) {
+  hist(model$residuals,
+       xlab = "Residuals", main = title, breaks = 50)
+}
+
+qq_plot = function(model, title) {
+  qqnorm(model$residuals, main = title, pch = 20)
+  qqline(model$residuals, lwd = 2, col = "red")
+}
+
+get_shapiro_pvalue = function(model) {
+  shapiro.test(model$residuals)$p.value
+}
 ```
 
-#### Check Normality assumption
+#### Fitted vs. Residuals Plots
 ```{r}
-# Histogram of Residuals
-hist(final_model$residuals, 
-     xlab = "Residuals", main = "Histogram of Residuals of Best Model", 
-     breaks = 50)
+par(mfrow = c(1, 2))
+fitted_vs_residuals(log_step_from_add, "Fitted vs. Residuals Plot for Step from Add (Log)")
+fitted_vs_residuals(log_step_from_int, "Fitted vs. Residuals Plot for Step from Int (Log)")
+```
+#### Histogram of Residuals
+```{r}
+par(mfrow = c(1, 2))
+residual_histogram(log_step_from_add, "Residual Histogram for Step from Add (Log)")
+residual_histogram(log_step_from_int, "Residual Histogram for Step from Int (Log)")
+```
 
-# QQ Plot
-qqnorm(final_model$residuals, main = "Normal Q-Q Plot of Best Model", pch = 20)
-qqline(final_model$residuals, lwd = 2, col = "red")
+#### Normal Q-Q Plots
+```{r}
+par(mfrow = c(1, 2))
+qq_plot(log_step_from_add, "QQ Plot for Step from Add (Log)")
+qq_plot(log_step_from_int, "QQ Plot for Step from Int (Log)")
+```
 
-# Shapiro-Wilkes Test
-shapiro.test(final_model$residuals)$p.value
+#### Compare Breusch-Pagan and Shapiro-Wilkes p-values
+```{r}
+pvalue_data = data.frame(Models = c("Step from Add (Log)", "Step from Int (Log)"),
+                         BP.pvalue = c(get_bp_pvalue(log_step_from_add), get_bp_pvalue(log_step_from_int)),
+                         Shapiro.pvalue = c(get_shapiro_pvalue(log_step_from_add), get_shapiro_pvalue(log_step_from_int)))
+
+library(knitr)
+library(kableExtra)
+kable(pvalue_data) %>% kable_styling(bootstrap_options = c("striped", "hover", "responsive", full_width = FALSE, position = "left"))
+```
+
+#### Check model statistics for the best model of the 4 models created from using step on the simple additive model with a logged response.
+- LOOCV
+```{r}
+calc_loocv_rmse = function(model) {
+  sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2))
+}
+
+calc_loocv_rmse(log_step_from_add)
+```
+
+- R^2
+```{r}
+summary(log_step_from_add)$r.squared
+summary(log_step_from_add)$adj.r.squared
+```
+These look good, the loocv-RMSE is low and the adjusted R^2 is high.
+
+#### Check model statistics for the best model of the 4 models created from using step on the interactive model with a logged response.
+- LOOCV
+```{r}
+calc_loocv_rmse(log_step_from_int)
+```
+
+- R^2
+```{r}
+summary(log_step_from_int)$r.squared
+summary(log_step_from_int)$adj.r.squared
+```
+
+To improve the best model of the 4 models created from using step on the simple additive model with a logged response, try some transformations on the predictors.
+```{r}
+log_step_from_add$coef
+
+transformed_log_step_from_add = lm(log(total_confirmed) ~ stay_at_home_requirements + I(stay_at_home_requirements^2) + mobility_parks + mobility_transit_stations, data = clean_data_subset)
 ```
 
 #### Outlier Diagnostics
 - Cook's distance + influence
 
 ```{r}
-cds = cooks.distance(final_model)
-n = length(final_model$fitted.values)
-influential_cd = 4 / n
-influential_points = cds > influential_cd
-
-clean_without_influence = clean_data_subset[!influential_points,]
-
-
-clean_int_log_model = lm(log(total_confirmed) ~ . ^ 2 - school_closing:stay_at_home_requirements - cancel_public_events:stay_at_home_requirements, data = clean_without_influence)
-cleaned_log_model = step(
-  clean_int_log_model,
-  scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2,
-  direction = "forward", trace = 0)
-
-shapiro.test(cleaned_log_model$residuals)$p.value
-as.vector(bptest(cleaned_log_model)$p.value)
-
-#plot(cleaned_log_model)
-```
-
-#### Model Statistics
-- LOOCV (multiple linear regression)
-```{r}
-calc_loocv_rmse = function(model) {
-  sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2))
-}
-
-calc_loocv_rmse(cleaned_log_model)
-```
-
-- R^2, RMSE (multiple linear regression)
-```{r}
-summary(cleaned_log_model)$r.squared
-summary(cleaned_log_model)$adj.r.squared
-summary(cleaned_log_model)$coefficients
+# cds = cooks.distance(final_model)
+# n = length(final_model$fitted.values)
+# influential_cd = 4 / n
+# influential_points = cds > influential_cd
+# 
+# clean_without_influence = clean_data_subset[!influential_points,]
+# 
+# 
+# clean_int_log_model = lm(log(total_confirmed) ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2, data = clean_without_influence)
+# null_log_model = lm(log(total_confirmed) ~ 1, data = clean_without_influence)
+# cleaned_log_model = step(
+#   null_log_model,
+#   scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2,
+#   direction = "forward", trace = 0)
+# 
+# shapiro.test(cleaned_log_model$residuals)$p.value
+# as.vector(bptest(cleaned_log_model)$p.value)
+# 
+# #plot(cleaned_log_model)
 ```
