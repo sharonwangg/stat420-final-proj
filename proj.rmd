@@ -22,7 +22,11 @@ We would like to explore which variables can best predict the total confirmed CO
 # loading this data takes awhile, storing as .csv might be faster although out of date
 #data_full <- read_csv("https://storage.googleapis.com/covid19-open-data/v2/main.csv")
 #write_csv(data_full, "data_full.csv")
+<<<<<<< Updated upstream
 data_full <- read_csv("data_full.csv", guess_max = 3103005)
+=======
+#data_full <- read_csv("data_full.csv", guess_max = 3103005)
+>>>>>>> Stashed changes
 ```
 
 Figuring out which columns have a lot of NAs and avoiding them
