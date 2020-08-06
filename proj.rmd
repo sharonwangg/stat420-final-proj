@@ -31,7 +31,6 @@ Figuring out which columns have a lot of NAs and avoiding them
 unique(data_full$locality_name)
 ```
 
-
 ```{r}
 apply(data_full, MARGIN = 2, FUN = function(x) { length(unique(x)) })
 ```
