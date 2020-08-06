@@ -21,18 +21,19 @@ We would like to explore which variables can best predict the total confirmed CO
 # github repo: https://github.com/open-covid-19/data
 # loading this data takes awhile, storing as .csv might be faster although out of date
 #data_full <- read_csv("https://storage.googleapis.com/covid19-open-data/v2/main.csv")
-#write_csv(data_full, "data_full.csv")
-<<<<<<< Updated upstream
-data_full <- read_csv("data_full.csv", guess_max = 3103005)
-=======
-#data_full <- read_csv("data_full.csv", guess_max = 3103005)
->>>>>>> Stashed changes
+# write_csv(data_full, "data_full.csv")
+data_full <- read_csv("data_full.csv", guess_max = 3825711)
 ```
 
 Figuring out which columns have a lot of NAs and avoiding them
 - although issue might be in certain countries and earlier dates (before the pandemic started)
-```{r include=FALSE}
-apply(data_full, MARGIN = 2, FUN = function(x) { sum(is.na(x)) })
+```{r}
+unique(data_full$locality_name)
+```
+
+
+```{r}
+apply(data_full, MARGIN = 2, FUN = function(x) { length(unique(x)) })
 ```
 
 Take complete cases so linear regression doesn't fail
@@ -70,6 +71,7 @@ max_cols$rows
 ```{r}
 complete_vec = complete.cases(data_full[, columns_kept])
 clean_data = data_full[complete_vec, columns_kept]
+clean_data$total_confirmed[1:100]
 ```
 
 Normalizing the population counts because absolute numbers probably don't add any predictive power
@@ -96,18 +98,10 @@ head(clean_data_subset)
 ```{r}
 # saving the cleaned dataset so that we don't have to keep running above code
 write_csv(clean_data_subset, "clean_data_subset.csv")
+clean_data_subset = read.csv("clean_data_subset.csv")
+clean_data_subset = clean_data_subset %>% subset(select = c(total_confirmed, school_closing, cancel_public_events, stay_at_home_requirements, mobility_parks, mobility_transit_stations))
+names(clean_data_subset)
 ```
-
-### Assumption Checking
-Linear model?
-- Linear
-- Independent
-  - no/little collinearity --> variance inflation factor (VIF)
-- Normal
-  - Shapiro-Wilk test
-  - Q-Q plot
-- Equal variance
-  - bptest
 
 ### Models
 - Additive
@@ -122,117 +116,32 @@ Linear model?
 - use of ANOVA to compare null vs. added model
 
 ```{r}
-colnames(clean_data_subset)
+str(clean_data_subset)
+clean_data_subset$date = NULL
 ```
 Above are the variables that seem to initially have a strong connection to the response, `total_confirmed`.
 
-```{r}
-clean_data_subset = clean_data_subset %>% drop_na()
-```
-
-```{r}
-# simple additive model
-full_add_model = lm(total_confirmed ~ ., data = clean_data_subset)
-full_add_model$coef
-```
-
 ### Correlation Analysis
 
-```{r}
-# subset of `clean_data_subset` with only numeric variables
-nums = unlist(lapply(clean_data_subset, is.numeric))
-numeric_data = clean_data_subset[, nums]
-```
-
 ### Scatter Plot Matrix
-```{r fig.height=20, fig.width=20, message=FALSE, warning=FALSE}
-pairs(numeric_data, pch = 20)
+```{r fig.height=20, fig.width=20}
+pairs(clean_data_subset, pch = 20)
 ```
-
 ```{r warning=FALSE}
-cor(numeric_data)
+cor(clean_data_subset)
 ```
-- `school_closing`, `cancel_public_events`, `restrictions_on_gatherings`, and `stay_at_home_requirements` have collinearity, which is not surprising because these 4 predictors are very similar to each other.
-- In addition, `mobility_retail_and_recreation` and `mobility_transit_stations` also have collinearity, which is not surprising because these 2 predictors are also very similar to each other.
 
 ```{r}
-# simple additive model
+# additive
 full_add_model = lm(total_confirmed ~ ., data = clean_data_subset)
-full_add_model$coef
+summary(full_add_model)
 ```
-
-```{r}
-# calculate residual standard error
-sigma(full_add_model)
-
-# calculate adjusted R^2
-summary(full_add_model)$adj.r.squared
-```
-
-Use backwards and fowards AIC/BIC using the simple additive model.
-```{r}
-# back aic
-back_aic = step(full_add_model, direction = "backward", trace = 0)
-# back bic
-n = length(full_add_model$residuals)
-back_bic = step(full_add_model, direction = "backward", k = log(n), trace = 0)
-# forward aic
-null_model = lm(total_confirmed ~ 1, data = clean_data_subset)
-forward_aic = step(
-  null_model,
-  scope = total_confirmed ~ population + urban_population + population_density + human_development_index + gdp_per_capita + date + life_expectancy + comorbidity_mortality_rate + physicians + school_closing + cancel_public_events + restrictions_on_gatherings + stay_at_home_requirements + mobility_retail_and_recreation + mobility_parks + mobility_transit_stations,
-  direction = "forward", trace = 0)
-# forward bic
-forward_bic = step(
-  null_model,
-  scope = total_confirmed ~ population + urban_population + population_density + human_development_index + gdp_per_capita + date + life_expectancy + comorbidity_mortality_rate + physicians + school_closing + cancel_public_events + restrictions_on_gatherings + stay_at_home_requirements + mobility_retail_and_recreation + mobility_parks + mobility_transit_stations,
-  direction = "forward", k = log(n), trace = 0)
-```
-
-```{r}
-all.equal(back_aic$coef, back_bic$coef)
-```
-The model created from backwards AIC and backwards BIC are the same model.
-
-```{r}
-back_model = back_aic
-```
-
-```{r}
-# use anova to compare the models created from AIC and BIC with the simple additive model
-(back_pvalue = anova(back_model, full_add_model)[2, "Pr(>F)"])
-(forward_aic_pvalue = anova(forward_aic, full_add_model)[2, "Pr(>F)"])
-(forward_bic_pvalue = anova(forward_bic, full_add_model)[2, "Pr(>F)"])
-```
-- The model created from backwards AIC/BIC predicts better than the simple additive model with a p-value of `r back_pvalue`.
-- The model created from forward AIC predicts better than the simple additive model with a p-value of `r forward_aic_pvalue`.
-- The the model created from forward BIC predicts better than the simple additive model with a p-value of `r forward_bic_pvalue`.
-
-```{r}
-# use anova to compare the models created from AIC and BIC with each other
-back_model$coef
-forward_aic$coef
-forward_bic$coef
-
-anova(back_model, forward_aic)[2, "Pr(>F)"]
-anova(back_model, forward_bic)[2, "Pr(>F)"]
-anova(forward_aic, forward_bic)[2, "Pr(>F)"]
-```
-- Therefore, the model created from backwards AIC/BIC predicts better than the interaction model, which predicts better than the model created from forward AIC and forward BIC.
 
 ```{r}
 # interaction
-int_model = lm(total_confirmed ~ . ^ 2, data = clean_data_subset)
+int_model = lm(total_confirmed ~ . ^ 2  - school_closing:stay_at_home_requirements - cancel_public_events:stay_at_home_requirements, data = clean_data_subset)
+summary(int_model)
 ```
-
-```{r}
-# calculate residual standard error
-sigma(int_model)
-
-# calculate adjusted R^2
-summary(int_model)$adj.r.squared
-```
-Model with all the available predictors as well as all possible 2-way interactions predicts better than the full additive model. 
 
 ```{r}
 # back aic
@@ -244,13 +153,59 @@ back_bic = step(int_model, direction = "backward", k = log(n), trace = 0)
 null_model = lm(total_confirmed ~ 1, data = clean_data_subset)
 forward_aic = step(
   null_model,
-  scope = total_confirmed ~ (population + urban_population + population_density + human_development_index + gdp_per_capita + date + life_expectancy + comorbidity_mortality_rate + physicians + school_closing + cancel_public_events + restrictions_on_gatherings + stay_at_home_requirements + mobility_retail_and_recreation + mobility_parks + mobility_transit_stations)^2,
+  scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2,
   direction = "forward", trace = 0)
 # forward bic
 forward_bic = step(
-  null_model,
-  scope = total_confirmed ~ (population + urban_population + population_density + human_development_index + gdp_per_capita + date + life_expectancy + comorbidity_mortality_rate + physicians + school_closing + cancel_public_events + restrictions_on_gatherings + stay_at_home_requirements + mobility_retail_and_recreation + mobility_parks + mobility_transit_stations)^2,
+  null_model, 
+  scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2, 
   direction = "forward", k = log(n), trace = 0)
+summary(back_aic)
+summary(back_bic)
+```
+
+```{r}
+#boxcox model
+boxcox(int_model, plotit = TRUE)
+boxcox(int_model, plotit = TRUE, lambda = seq(-1.0, 1.0, by = 0.1))
+```
+
+```{r}
+#log model
+int_log_model = lm(log(total_confirmed) ~ . ^ 2 - school_closing:stay_at_home_requirements - cancel_public_events:stay_at_home_requirements, data = clean_data_subset)
+
+back_aic_log_model = step(int_log_model, direction = "backward", trace = 0)
+back_bic_log_model = step(int_log_model, direction = "backward", k = log(n), trace = 0)
+
+null_model = lm(log(total_confirmed) ~ 1, data = clean_data_subset)
+
+#forward aic log
+forward_aic_log = step(
+  null_model,
+  scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2,
+  direction = "forward", trace = 0)
+
+# forward bic log
+forward_bic_log = step(
+  null_model, 
+  scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2, 
+  direction = "forward", k = log(n), trace = 0)
+
+boxcox(back_aic_log_model, plotit = TRUE)
+boxcox(back_bic_log_model, plotit = TRUE)
+boxcox(forward_aic_log, plotit = TRUE)
+boxcox(forward_bic_log, plotit = TRUE)
+```
+
+```{r}
+(anova(back_aic_log_model, int_log_model)[2, "Pr(>F)"])
+(anova(back_bic_log_model, int_log_model)[2, "Pr(>F)"])
+(anova(forward_aic_log, int_log_model)[2, "Pr(>F)"])
+(anova(forward_bic_log, int_log_model)[2, "Pr(>F)"])
+
+(anova(back_aic_log_model, back_bic_log_model)[2, "Pr(>F)"])
+length(coef(back_aic_log_model))
+length(coef(back_bic_log_model))
 ```
 
 ```{r}
@@ -268,75 +223,94 @@ back_model = back_aic
 (forward_aic_pvalue = anova(forward_aic, int_model)[2, "Pr(>F)"])
 (forward_bic_pvalue = anova(forward_bic, int_model)[2, "Pr(>F)"])
 ```
-- The model created from backwards AIC/BIC predicts better than the interaction model with a p-value of `r back_pvalue`.
+- The model created from backwards AIC/BIC predicts better than the interaction model with a p-value of `r back_aic_pvalue`. 
 - The interaction model predicts better than the model created from forward AIC with a p-value of `r forward_aic_pvalue`.
 - The interaction model predicts better than the model created from forward BIC with a p-value of `r forward_bic_pvalue`.
 - Therefore, the model created from backwards AIC/BIC predicts better than the interaction model, which predicts better than the model created from forward AIC and forward BIC.
 
 ```{r}
-best_model = back_model
+best_model = back_bic_log_model
+#coef(best_model)
+car::vif(best_model)
+plot(best_model$model)
 ```
+
+### Assumption Checking
+Linear model?
+- Linear
+- Independent
+  - no/little collinearity --> variance inflation factor (VIF)
+- Normal
+  - Shapiro-Wilk test
+  - Q-Q plot
+- Equal variance
+  - bptest
 
 #### Residual Diagnostics
 - fitted vs residuals plot
 
 ```{r}
-# plot(best_model$fitted.values, best_model$residuals, pch = 20,
-#     xlab = "Fitted", ylab = "Residuals", main = "Data from the Best Model")
-# abline(h = 0, lwd = 2, col = "red")
+plot(best_model$fitted.values, best_model$residuals, pch = 20,
+    xlab = "Fitted", ylab = "Residuals", main = "Data from the Best Model")
+abline(h = 0, lwd = 2, col = "red")
 ```
 
 #### Check Constant Variance assumption
 ```{r}
-# # Breusch-Pagan Test
-# library(lmtest)
-# as.vector(bptest(best_model)$p.value)
+# Breusch-Pagan Test
+library(lmtest)
+as.vector(bptest(best_model)$p.value)
 ```
 
 #### Check Normality assumption
 ```{r}
-# # Histogram of Residuals
-# hist(best_model$residuals,
-#      xlab = "Residuals", main = "Histogram of Residuals of Best Model",
-#      breaks = 50)
-# 
-# # QQ Plot
-# qqnorm(best_model$residuals, main = "Normal Q-Q Plot of Best Model", pch = 20)
-# qqline(best_model$residuals, lwd = 2, col = "red")
-# 
-# # Shapiro-Wilkes Test
-# shapiro.test(best_model$residuals)$p.value
+# Histogram of Residuals
+hist(best_model$residuals, 
+     xlab = "Residuals", main = "Histogram of Residuals of Best Model", 
+     breaks = 50)
+
+# QQ Plot
+qqnorm(best_model$residuals, main = "Normal Q-Q Plot of Best Model", pch = 20)
+qqline(best_model$residuals, lwd = 2, col = "red")
+
+# Shapiro-Wilkes Test
+shapiro.test(best_model$residuals)$p.value
 ```
 
 #### Outlier Diagnostics
 - Cook's distance + influence
 
 ```{r}
-# cds = cooks.distance(best_model)
-# n = length(best_model$fitted.values)
-# influential_cd = 4 / n
-# cds[cds > influential_cd]
+cds = cooks.distance(best_model)
+n = length(best_model$fitted.values)
+influential_cd = 4 / n
+influential_points = cds > influential_cd
+
+clean_without_influence = clean_data_subset[!influential_points,]
+
+
+clean_int_log_model = lm(log(total_confirmed) ~ . ^ 2 - school_closing:stay_at_home_requirements - cancel_public_events:stay_at_home_requirements, data = clean_without_influence)
+new_best_model = step(clean_int_log_model, direction = "backward", k = log(nrow(clean_without_influence)), trace = 0)
+
+shapiro.test(new_best_model$residuals)$p.value
+as.vector(bptest(new_best_model)$p.value)
+
+plot(new_best_model)
 ```
 
 #### Model Statistics
 - LOOCV (multiple linear regression)
 ```{r}
-# calc_loocv_rmse = function(model) {
-#   sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2))
-# }
-# 
-# calc_loocv_rmse(best_model)
+calc_loocv_rmse = function(model) {
+  sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2))
+}
+
+calc_loocv_rmse(new_best_model)
 ```
-- K-fold CV (general linear regression)
-```{r}
-# library(boot)
-# set.seed(1)
-# cv.glm(clean_data_subset, best_model, K = 5)$delta[1]
-```
+
 - R^2, RMSE (multiple linear regression)
 ```{r}
-# summary(best_model)$r.squared
-# summary(best_model)$adj.r.squared
+summary(new_best_model)$r.squared
+summary(new_best_model)$adj.r.squared
+summary(new_best_model)$coefficients
 ```
-
-
