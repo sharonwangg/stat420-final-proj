@@ -28,10 +28,6 @@ data_full <- read_csv("data_full.csv", guess_max = 3825711)
 Figuring out which columns have a lot of NAs and avoiding them
 - although issue might be in certain countries and earlier dates (before the pandemic started)
 ```{r}
-unique(data_full$locality_name)
-```
-
-```{r}
 apply(data_full, MARGIN = 2, FUN = function(x) { length(unique(x)) })
 ```
 
@@ -130,6 +126,8 @@ pairs(clean_data_subset, pch = 20)
 cor(clean_data_subset)
 ```
 
+Below, we will be fitting the additive and interactive models for the data.
+
 ```{r}
 # additive
 full_add_model = lm(total_confirmed ~ ., data = clean_data_subset)
@@ -141,6 +139,8 @@ summary(full_add_model)
 int_model = lm(total_confirmed ~ . ^ 2  - school_closing:stay_at_home_requirements - cancel_public_events:stay_at_home_requirements, data = clean_data_subset)
 summary(int_model)
 ```
+
+Using our model that includes all the interactions, we can use those as starting points for the AIC and BIC created models. 
 
 ```{r}
 # back aic
@@ -163,11 +163,35 @@ summary(back_aic)
 summary(back_bic)
 ```
 
+
+```{r}
+# use anova to compare to models created from AIC and BIC
+(back_pvalue = anova(back_aic, int_model)[2, "Pr(>F)"])
+(forward_aic_pvalue = anova(forward_aic, int_model)[2, "Pr(>F)"])
+(forward_bic_pvalue = anova(forward_bic, int_model)[2, "Pr(>F)"])
+```
+- The model created from backwards AIC/BIC predicts better than the interaction model with a p-value of `r back_pvalue`. 
+- The interaction model predicts better than the model created from forward AIC with a p-value of `r forward_aic_pvalue`.
+- The interaction model predicts better than the model created from forward BIC with a p-value of `r forward_bic_pvalue`.
+- Therefore, the model created from backwards AIC/BIC predicts better than the interaction model, which predicts better than the model created from forward AIC and forward BIC.
+
+```{r}
+best_model = back_bic
+#coef(best_model)
+car::vif(best_model)
+plot(best_model$model)
+```
+
+The vifs are not terrible on this model, however, based on these plots, it is possible to do better.
+
 ```{r}
 #boxcox model
+library(MASS)
+library(faraway)
 boxcox(int_model, plotit = TRUE)
-boxcox(int_model, plotit = TRUE, lambda = seq(-1.0, 1.0, by = 0.1))
 ```
+
+Based on the boxcox plot, it seems like we should be using a logarithmic transformation so we start by taking the log of the response variable.
 
 ```{r}
 #log model
@@ -189,49 +213,36 @@ forward_bic_log = step(
   null_model, 
   scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2, 
   direction = "forward", k = log(n), trace = 0)
+```
 
+Now that we have all the AIC and BIC determined models with a log transformation of the response variable, we can take a look at the boxcox plots. 
+
+```{r}
 boxcox(back_aic_log_model, plotit = TRUE)
 boxcox(back_bic_log_model, plotit = TRUE)
 boxcox(forward_aic_log, plotit = TRUE)
 boxcox(forward_bic_log, plotit = TRUE)
 ```
 
+These boxcox plots indicate that we made the right transformations so now we can determine which of these models are the best.
+
 ```{r}
 (anova(back_aic_log_model, int_log_model)[2, "Pr(>F)"])
 (anova(back_bic_log_model, int_log_model)[2, "Pr(>F)"])
 (anova(forward_aic_log, int_log_model)[2, "Pr(>F)"])
 (anova(forward_bic_log, int_log_model)[2, "Pr(>F)"])
-
-(anova(back_aic_log_model, back_bic_log_model)[2, "Pr(>F)"])
-length(coef(back_aic_log_model))
-length(coef(back_bic_log_model))
 ```
 
-```{r}
-all.equal(back_aic$coef, back_bic$coef)
-```
-The model created from backwards AIC and backwards BIC are the same model.
+Based on these p-values from the anova tests, we should compare the backwards AIC model and the forward AIC model.
 
 ```{r}
-back_model = back_aic
+(anova(forward_aic_log, back_aic_log_model)[2, "Pr(>F)"])
 ```
 
-```{r}
-# use anova to compare to models created from AIC and BIC
-(back_pvalue = anova(back_model, int_model)[2, "Pr(>F)"])
-(forward_aic_pvalue = anova(forward_aic, int_model)[2, "Pr(>F)"])
-(forward_bic_pvalue = anova(forward_bic, int_model)[2, "Pr(>F)"])
-```
-- The model created from backwards AIC/BIC predicts better than the interaction model with a p-value of `r back_aic_pvalue`. 
-- The interaction model predicts better than the model created from forward AIC with a p-value of `r forward_aic_pvalue`.
-- The interaction model predicts better than the model created from forward BIC with a p-value of `r forward_bic_pvalue`.
-- Therefore, the model created from backwards AIC/BIC predicts better than the interaction model, which predicts better than the model created from forward AIC and forward BIC.
+Based on the p-value of this anova test, we can see that the we should be choosing the smaller model which in this case is the foward_aic_log model. Let us set the forward_aic_log model as the final model we will be using to check the assumptions we are making of this model.
 
 ```{r}
-best_model = back_bic_log_model
-#coef(best_model)
-car::vif(best_model)
-plot(best_model$model)
+final_model = forward_aic_log
 ```
 
 ### Assumption Checking
@@ -249,7 +260,7 @@ Linear model?
 - fitted vs residuals plot
 
 ```{r}
-plot(best_model$fitted.values, best_model$residuals, pch = 20,
+plot(final_model$fitted.values, final_model$residuals, pch = 20,
     xlab = "Fitted", ylab = "Residuals", main = "Data from the Best Model")
 abline(h = 0, lwd = 2, col = "red")
 ```
@@ -258,30 +269,30 @@ abline(h = 0, lwd = 2, col = "red")
 ```{r}
 # Breusch-Pagan Test
 library(lmtest)
-as.vector(bptest(best_model)$p.value)
+as.vector(bptest(final_model)$p.value)
 ```
 
 #### Check Normality assumption
 ```{r}
 # Histogram of Residuals
-hist(best_model$residuals, 
+hist(final_model$residuals, 
      xlab = "Residuals", main = "Histogram of Residuals of Best Model", 
      breaks = 50)
 
 # QQ Plot
-qqnorm(best_model$residuals, main = "Normal Q-Q Plot of Best Model", pch = 20)
-qqline(best_model$residuals, lwd = 2, col = "red")
+qqnorm(final_model$residuals, main = "Normal Q-Q Plot of Best Model", pch = 20)
+qqline(final_model$residuals, lwd = 2, col = "red")
 
 # Shapiro-Wilkes Test
-shapiro.test(best_model$residuals)$p.value
+shapiro.test(final_model$residuals)$p.value
 ```
 
 #### Outlier Diagnostics
 - Cook's distance + influence
 
 ```{r}
-cds = cooks.distance(best_model)
-n = length(best_model$fitted.values)
+cds = cooks.distance(final_model)
+n = length(final_model$fitted.values)
 influential_cd = 4 / n
 influential_points = cds > influential_cd
 
@@ -289,12 +300,15 @@ clean_without_influence = clean_data_subset[!influential_points,]
 
 
 clean_int_log_model = lm(log(total_confirmed) ~ . ^ 2 - school_closing:stay_at_home_requirements - cancel_public_events:stay_at_home_requirements, data = clean_without_influence)
-new_best_model = step(clean_int_log_model, direction = "backward", k = log(nrow(clean_without_influence)), trace = 0)
+cleaned_log_model = step(
+  clean_int_log_model,
+  scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2,
+  direction = "forward", trace = 0)
 
-shapiro.test(new_best_model$residuals)$p.value
-as.vector(bptest(new_best_model)$p.value)
+shapiro.test(cleaned_log_model$residuals)$p.value
+as.vector(bptest(cleaned_log_model)$p.value)
 
-plot(new_best_model)
+#plot(cleaned_log_model)
 ```
 
 #### Model Statistics
@@ -304,12 +318,12 @@ calc_loocv_rmse = function(model) {
   sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2))
 }
 
-calc_loocv_rmse(new_best_model)
+calc_loocv_rmse(cleaned_log_model)
 ```
 
 - R^2, RMSE (multiple linear regression)
 ```{r}
-summary(new_best_model)$r.squared
-summary(new_best_model)$adj.r.squared
-summary(new_best_model)$coefficients
+summary(cleaned_log_model)$r.squared
+summary(cleaned_log_model)$adj.r.squared
+summary(cleaned_log_model)$coefficients
 ```
