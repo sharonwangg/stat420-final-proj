@@ -83,8 +83,8 @@ Select columns that would best fit our goal
 ```{r}
 clean_data_subset = clean_data %>%
   bind_cols(normalized_population) %>%
-  filter(country_code == "US") %>%
-  subset(select = -country_code)
+  subset(country_code == "US") %>%
+  subset(select = -c(country_code))
 ```
 
 Then, remove some variables who had VIFs as large as the thousands and tens of thousands, which would negatively impact the overall model.
@@ -347,30 +347,36 @@ To improve the best model of the 4 models created from using step on the simple 
 ```{r}
 log_step_from_add$coef
 
-transformed_log_step_from_add = lm(log(total_confirmed) ~ stay_at_home_requirements + I(stay_at_home_requirements^2) + mobility_parks + mobility_transit_stations, data = clean_data_subset)
+transformed_log_step_from_add = lm(log(total_confirmed) ~ stay_at_home_requirements + log(mobility_parks + abs(min(mobility_parks)) + 1) + log(mobility_transit_stations + abs(min(mobility_transit_stations)) + 1), data = clean_data_subset)
+
+summary(transformed_log_step_from_add)
+plot(transformed_log_step_from_add$model)
+plot(transformed_log_step_from_add)
 ```
 
 #### Outlier Diagnostics
 - Cook's distance + influence
 
 ```{r}
-# cds = cooks.distance(final_model)
-# n = length(final_model$fitted.values)
-# influential_cd = 4 / n
-# influential_points = cds > influential_cd
-# 
-# clean_without_influence = clean_data_subset[!influential_points,]
-# 
-# 
-# clean_int_log_model = lm(log(total_confirmed) ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2, data = clean_without_influence)
-# null_log_model = lm(log(total_confirmed) ~ 1, data = clean_without_influence)
-# cleaned_log_model = step(
-#   null_log_model,
-#   scope = total_confirmed ~ (school_closing + cancel_public_events + stay_at_home_requirements + mobility_parks + mobility_transit_stations)^2,
-#   direction = "forward", trace = 0)
-# 
-# shapiro.test(cleaned_log_model$residuals)$p.value
-# as.vector(bptest(cleaned_log_model)$p.value)
-# 
-# #plot(cleaned_log_model)
+final_model = transformed_log_step_from_add
+
+cds = cooks.distance(final_model)
+n = length(final_model$fitted.values)
+influential_cd = 4 / n
+influential_points = cds > influential_cd
+
+clean_without_influence = clean_data_subset[!influential_points,]
+
+refit_final_model = lm(final_model$call$formula, data = clean_without_influence)
+null_log_model = lm(log(total_confirmed) ~ 1, data = clean_without_influence)
+step_refit_final_model = step(
+  null_log_model,
+  scope = final_model$call$formula,
+  direction = "forward", trace = 0)
+
+# shapiro.test(step_refit_final_model$residuals)$p.value
+as.vector(bptest(step_refit_final_model)$p.value)
+
+plot(step_refit_final_model$model)
+plot(step_refit_final_model)
 ```
